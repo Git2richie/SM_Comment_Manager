@@ -2,94 +2,104 @@ import streamlit as st
 from snowflake.snowpark.context import get_active_session
 import re
 
-st.set_page_config(layout="wide")
-st.title("📺 YouTube AI Comment Manager")
+st.set_page_config(layout="wide", page_title="YouTube AI Manager")
+st.title("📺 YouTube Channel Comment Manager")
 
 session = get_active_session()
 
-# --- NEW: Fetching Section ---
+# --- 1. Session State Initialization ---
+if 'active_vid' not in st.session_state:
+    st.session_state.active_vid = None
+
+# --- 2. Sidebar: Channel & Video Selection ---
 with st.sidebar:
-    st.header("Import New Comments")
-    url_input = st.text_input("Paste YouTube Video URL:", placeholder="https://www.youtube.com/watch?v=...")
+    st.header("Channel Explorer")
+    target_id = st.text_input("Target Channel ID:", placeholder="UCxxxxxxxxxxxx")
     
-    if st.button("📥 Fetch & Analyze"):
-        if url_input:
-            # Extract Video ID using Regex
-            video_id_match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url_input)
-            if video_id_match:
-                vid_id = video_id_match.group(1)
-                with st.spinner(f"Fetching comments for {vid_id}..."):
-                    session.sql("DELETE FROM YT_COMMENTS_STAGE").collect()   
-                   
-                    # 1. Call the Fetch Procedure
-                    session.call("FETCH_YOUTUBE_COMMENTS", vid_id)
-                    
-                    # 2. Run the AI Analysis immediately
+    if st.button("🔄 Sync Video List"):
+        if target_id:
+            with st.spinner("Fetching channel videos..."):
+                session.call("FETCH_CHANNEL_CONTENT", target_id)
+            st.rerun()
+        else:
+            st.error("Please enter a Channel ID.")
+
+    st.divider()
+
+    # Dropdown to select a video from the indexed list
+    try:
+        video_list_df = session.table("OTHER_CHANNEL_VIDEOS").order_by("PUBLISHED_AT", ascending=False).to_pandas()
+        if not video_list_df.empty:
+            option = st.selectbox("Select a video:", video_list_df['TITLE'])
+            selected_id = video_list_df[video_list_df['TITLE'] == option]['VIDEO_ID'].values[0]
+            
+            if st.button("🚀 Fetch & Analyze New Video"):
+                st.session_state.active_vid = selected_id
+                with st.spinner("Wiping old data and analyzing new comments..."):
+                    # 1. Wipe the stage
+                    session.sql("DELETE FROM YT_COMMENTS_STAGE").collect()
+                    # 2. Fetch comments for this specific ID
+                    session.call("FETCH_YOUTUBE_COMMENTS", selected_id)
+                    # 3. AI Analysis
                     session.sql("""
                         UPDATE YT_COMMENTS_STAGE
-                        SET 
-                            SENTIMENT_LABEL = SNOWFLAKE.CORTEX.SENTIMENT(COMMENT_TEXT),
-                            AI_DRAFT_REPLY = SNOWFLAKE.CORTEX.COMPLETE(
-                                'mistral-large',
-                                CONCAT('You are a friendly creator. Reply to: "', COMMENT_TEXT, '"')
-                            )
-                        WHERE STATUS = 'PENDING_REVIEW' AND VIDEO_ID = ?
-                    """, params=[vid_id]).collect()
-                    
-                st.success("Fetched and Analyzed!")
-                st.rerun()
-            else:
-                st.error("Invalid YouTube URL. Please check it.")
-        else:
-            st.warning("Please paste a URL first.")
-
-# --- Existing Review Section ---
-st.subheader("Pending Approvals")
-def load_data():
-    return session.sql("SELECT COMMENT_ID, AUTHOR_NAME, COMMENT_TEXT, AI_DRAFT_REPLY FROM YT_COMMENTS_STAGE WHERE STATUS = 'PENDING_REVIEW'").to_pandas()
-
-df = load_data()
-# # ... (rest of your loop logic for displaying comments)
-
-# # Load comments that need review
-# def load_data():
-#     return session.sql("SELECT COMMENT_ID, AUTHOR_NAME, COMMENT_TEXT, AI_DRAFT_REPLY FROM YT_COMMENTS_STAGE WHERE STATUS = 'PENDING_REVIEW'").to_pandas()
-
-# df = load_data()
-
-if df.empty:
-    st.success("No comments pending review! Great job.")
-    if st.button("Refresh"):
-        st.rerun()
-else:
-    for index, row in df.iterrows():
-        with st.container(border=True):
-            col1, col2 = st.columns([1, 2])
-            
-            with col1:
-                st.subheader(row['AUTHOR_NAME'])
-                st.write(f"**Comment:** {row['COMMENT_TEXT']}")
-            
-            with col2:
-                # This allows you to modify the AI's draft
-                final_reply = st.text_area("AI Suggested Reply (Edit if needed):", 
-                                          value=row['AI_DRAFT_REPLY'], 
-                                          key=f"text_{row['COMMENT_ID']}")
-                
-                if st.button("Approve & Post", key=f"btn_{row['COMMENT_ID']}"):
-                    # Update status and save the final text
-                    session.sql(f"""
-                        UPDATE YT_COMMENTS_STAGE 
-                        SET STATUS = 'APPROVED', 
-                            AI_DRAFT_REPLY = '{final_reply.replace("'", "''")}'
-                        WHERE COMMENT_ID = '{row['COMMENT_ID']}'
+                        SET SENTIMENT_LABEL = SNOWFLAKE.CORTEX.SENTIMENT(COMMENT_TEXT),
+                            AI_DRAFT_REPLY = SNOWFLAKE.CORTEX.COMPLETE('llama3-8b', 
+                                CONCAT('Write a short, friendly YouTube reply to: ', COMMENT_TEXT))
+                        WHERE STATUS = 'PENDING_REVIEW'
                     """).collect()
-                    st.success("Comment marked for posting!")
-                    st.rerun()
+                st.rerun()
+    except Exception as e:
+        st.info("Sync the video list to get started.")
 
-st.divider()
-st.caption("Once approved, the status changes to 'APPROVED'. Next, we will build the script that actually sends these to YouTube.")
-if st.button("🚀 Push Approved Replies to YouTube"):
-    with st.spinner("Posting to YouTube..."):
-        result = session.call("POST_YOUTUBE_REPLIES")
-        st.success(result)
+# --- 3. Main Display Area ---
+if st.session_state.active_vid:
+    st.subheader(f"Reviewing Video: {st.session_state.active_vid}")
+    
+    # Load comments
+    df = session.sql("""
+        SELECT COMMENT_ID, AUTHOR_NAME, COMMENT_TEXT, SENTIMENT_LABEL, AI_DRAFT_REPLY, STATUS 
+        FROM YT_COMMENTS_STAGE 
+        WHERE STATUS IN ('PENDING_REVIEW', 'APPROVED')
+    """).to_pandas()
+
+    if df.empty:
+        st.success("All caught up! No pending comments.")
+    else:
+        # Loop through comments
+        for index, row in df.iterrows():
+            is_approved = (row['STATUS'] == 'APPROVED')
+            
+            with st.container(border=True):
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    st.write(f"**{row['AUTHOR_NAME']}**")
+                    st.caption(f"Sentiment: {row['SENTIMENT_LABEL']}")
+                    st.write(row['COMMENT_TEXT'])
+                with c2:
+                    final_reply = st.text_area("Draft Reply:", value=row['AI_DRAFT_REPLY'], key=f"t_{row['COMMENT_ID']}")
+                    
+                    if not is_approved:
+                        if st.button("✅ Approve", key=f"app_{row['COMMENT_ID']}"):
+                            session.sql(f"""
+                                UPDATE YT_COMMENTS_STAGE 
+                                SET STATUS = 'APPROVED', 
+                                    AI_DRAFT_REPLY = '{final_reply.replace("'", "''")}' 
+                                WHERE COMMENT_ID = '{row['COMMENT_ID']}'
+                            """).collect()
+                            st.rerun()
+                    else:
+                        st.success("Ready to Post")
+
+        st.divider()
+        
+        # Batch Posting Button
+        approved_count = len(df[df['STATUS'] == 'APPROVED'])
+        if approved_count > 0:
+            if st.button(f"🚀 Push {approved_count} Replies to YouTube"):
+                with st.spinner("Posting..."):
+                    result = session.call("POST_YOUTUBE_REPLIES")
+                    st.success(result)
+                    st.rerun()
+else:
+    st.info("👈 Select a video from the sidebar to start.")
