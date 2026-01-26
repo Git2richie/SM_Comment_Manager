@@ -19,6 +19,7 @@ with st.sidebar:
     if st.button("🔄 Sync Video List"):
         if target_id:
             with st.spinner("Fetching channel videos..."):
+                session.sql("DELETE FROM OTHER_CHANNEL_VIDEOS").collect()
                 session.call("FETCH_CHANNEL_CONTENT", target_id)
             st.rerun()
         else:
@@ -41,13 +42,21 @@ with st.sidebar:
                     # 2. Fetch comments for this specific ID
                     session.call("FETCH_YOUTUBE_COMMENTS", selected_id)
                     # 3. AI Analysis
-                    session.sql("""
-                        UPDATE YT_COMMENTS_STAGE
-                        SET SENTIMENT_LABEL = SNOWFLAKE.CORTEX.SENTIMENT(COMMENT_TEXT),
-                            AI_DRAFT_REPLY = SNOWFLAKE.CORTEX.COMPLETE('llama3-8b', 
-                                CONCAT('Write a short, friendly YouTube reply to: ', COMMENT_TEXT))
-                        WHERE STATUS = 'PENDING_REVIEW'
-                    """).collect()
+# Updated Analysis: Clean SQL-Safe Prompt
+                instructions = (
+            "SYSTEM: You are a fellow viewer. Tone: Casual. "
+            "Constraint: Write ONLY the reply text. Max 2 sentences. "
+            "User Comment: "
+        )
+                
+                session.sql(f"""
+                    UPDATE YT_COMMENTS_STAGE
+                    SET SENTIMENT_LABEL = SNOWFLAKE.CORTEX.SENTIMENT(COMMENT_TEXT),
+                        AI_DRAFT_REPLY = SNOWFLAKE.CORTEX.COMPLETE('llama3-8b', 
+                            '{instructions}' || REPLACE(COMMENT_TEXT, CHAR(39), CHAR(39) || CHAR(39))
+                        )
+                    WHERE STATUS = 'PENDING_REVIEW'
+                """).collect()
                 st.rerun()
     except Exception as e:
         st.info("Sync the video list to get started.")
