@@ -7,11 +7,11 @@ st.title("📺 YouTube Channel Comment Manager")
 
 session = get_active_session()
 
-# --- 1. Session State Initialization ---
+# -- 1. Session State Initialization --
 if 'active_vid' not in st.session_state:
     st.session_state.active_vid = None
 
-# --- 2. Sidebar: Channel & Video Selection ---
+# -- 2. Sidebar: Channel & Video Selection --
 with st.sidebar:
     st.header("Channel Explorer")
     target_id = st.text_input("Target Channel ID:", placeholder="UCxxxxxxxxxxxx")
