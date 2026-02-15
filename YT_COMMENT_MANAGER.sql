@@ -1,3 +1,5 @@
+--STEP-1 Create Integrations so that your application can talk to Youtube, you need to generate the token from Google Cloud console for YoutTube Data API 
+
 CREATE OR REPLACE NETWORK RULE youtube_network_rule
   MODE = EGRESS
   TYPE = HOST_PORT
@@ -21,6 +23,8 @@ CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION youtube_api_integration
   ALLOWED_AUTHENTICATION_SECRETS = (youtube_oauth_token, youtube_client_id, youtube_client_secret)
   ENABLED = TRUE;
 
+--Step-2 Load the channel data (video ID Titles and timestamps) into a table and another table for comments 
+
 CREATE OR REPLACE TABLE OTHER_CHANNEL_VIDEOS (
     VIDEO_ID STRING PRIMARY KEY,
     TITLE STRING,
@@ -37,6 +41,8 @@ CREATE OR REPLACE TABLE YT_COMMENTS_STAGE (
     STATUS STRING DEFAULT 'PENDING_REVIEW', -- PENDING_REVIEW, APPROVED, PUBLISHED
     CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- STEP-3 Procedures to fetch channel content this will populate the data in the tables we created in step-2
 
 CREATE OR REPLACE PROCEDURE FETCH_CHANNEL_CONTENT(target_channel_id STRING)
 RETURNS STRING
@@ -144,6 +150,7 @@ def fetch_comments(session, video_id):
     return f"Successfully fetched {count} comments for video {video_id}"
 $$;
 
+  --Step-4 Update the comments table with the draft replies generated via Cortex functions
 
 UPDATE YT_COMMENTS_STAGE
 SET 
@@ -161,6 +168,8 @@ SET
     )
 WHERE STATUS = 'PENDING_REVIEW';
 
+-- Step-4 Procedure for posting Youtube replies
+  
 CREATE OR REPLACE PROCEDURE POST_YOUTUBE_REPLIES()
 RETURNS STRING
 LANGUAGE PYTHON
@@ -215,6 +224,3 @@ def post_replies(session,):
             
     return f"Successfully posted {count} replies to YouTube!"
 $$;
-
-
-CALL POST_YOUTUBE_REPLIES();
