@@ -46,7 +46,7 @@ Ensure the Python requirements include snowflake-snowpark-python.
 
 Engage: Edit or approve the drafts to maintain your channel's community.
 
-📈 Roadmap (Next Steps)
+📈 Possible Next Steps
 [ ] Context-Aware Analysis: Joining video descriptions and titles into the AI prompt for more relevant replies.
 [ ] Analytics Dashboard: Visualizing comment sentiment trends over time.
 
